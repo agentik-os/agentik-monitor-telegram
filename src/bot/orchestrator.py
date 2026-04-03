@@ -280,8 +280,17 @@ class MessageOrchestrator:
             self._register_classic_handlers(app)
 
     def _register_agentic_handlers(self, app: Application) -> None:
-        """Register agentic handlers: commands + text/file/photo."""
+        """Register agentic handlers: commands + text/file/photo + menu."""
         from .handlers import command
+        from .handlers.automation_actions import automation_callback
+        from .handlers.menu import (
+            menu_callback,
+            menu_command,
+            monitoring_callback,
+            project_callback,
+            quick_action_callback,
+            settings_callback,
+        )
 
         # Commands
         handlers = [
@@ -290,6 +299,7 @@ class MessageOrchestrator:
             ("status", self.agentic_status),
             ("verbose", self.agentic_verbose),
             ("repo", self.agentic_repo),
+            ("menu", menu_command),
         ]
         if self.settings.enable_project_threads:
             handlers.append(("sync_threads", command.sync_threads))
@@ -297,11 +307,11 @@ class MessageOrchestrator:
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, self._inject_deps(handler)))
 
-        # Text messages -> Claude
+        # Text messages -> check automation wizard first, then Claude
         app.add_handler(
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND,
-                self._inject_deps(self.agentic_text),
+                self._inject_deps(self._agentic_text_with_automation),
             ),
             group=10,
         )
@@ -320,7 +330,39 @@ class MessageOrchestrator:
             group=10,
         )
 
-        # Only cd: callbacks (for project selection), scoped by pattern
+        # Menu navigation callbacks
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(menu_callback), pattern=r"^menu:"
+            )
+        )
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(automation_callback), pattern=r"^auto:"
+            )
+        )
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(monitoring_callback), pattern=r"^mon:"
+            )
+        )
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(quick_action_callback), pattern=r"^quick:"
+            )
+        )
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(project_callback), pattern=r"^proj:"
+            )
+        )
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(settings_callback), pattern=r"^set:"
+            )
+        )
+
+        # cd: callbacks (for project selection)
         app.add_handler(
             CallbackQueryHandler(
                 self._inject_deps(self._agentic_callback),
@@ -387,6 +429,7 @@ class MessageOrchestrator:
                 BotCommand("status", "Show session status"),
                 BotCommand("verbose", "Set output verbosity (0/1/2)"),
                 BotCommand("repo", "List repos / switch workspace"),
+                BotCommand("menu", "Open the control panel"),
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "Sync project topics"))
@@ -686,6 +729,16 @@ class MessageOrchestrator:
 
         return _on_stream
 
+    async def _agentic_text_with_automation(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Check for pending automation wizard, otherwise pass to Claude."""
+        from .handlers.automation_actions import handle_automation_input
+
+        consumed = await handle_automation_input(update, context)
+        if not consumed:
+            await self.agentic_text(update, context)
+
     async def agentic_text(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -835,15 +888,47 @@ class MessageOrchestrator:
                         ),
                     )
 
+        # Push messages to Convex bridge (fire-and-forget, never affects bot)
+        bridge = context.bot_data.get("bridge")
+        if bridge and success:
+            try:
+                chat_id = update.effective_chat.id
+                bridge.fire_and_forget(
+                    bridge.upsert_conversation(chat_id, title=message_text[:80])
+                )
+                bridge.fire_and_forget(
+                    bridge.send_message(
+                        chat_id, "user", message_text,
+                        telegram_message_id=update.message.message_id,
+                    )
+                )
+                response_content = (
+                    claude_response.content if claude_response else ""
+                )
+                bridge.fire_and_forget(
+                    bridge.send_message(chat_id, "assistant", response_content)
+                )
+                bridge.fire_and_forget(
+                    bridge.send_activity(
+                        "message", f"User message processed",
+                        description=message_text[:120],
+                    )
+                )
+            except Exception as bridge_err:
+                logger.debug("Bridge push failed", error=str(bridge_err))
+
         # Audit log
         audit_logger = context.bot_data.get("audit_logger")
         if audit_logger:
-            await audit_logger.log_command(
-                user_id=user_id,
-                command="text_message",
-                args=[message_text[:100]],
-                success=success,
-            )
+            try:
+                await audit_logger.log_command(
+                    user_id=user_id,
+                    command="text_message",
+                    args=[message_text[:100]],
+                    success=success,
+                )
+            except Exception:
+                logger.debug("Failed to log audit")
 
     async def agentic_document(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

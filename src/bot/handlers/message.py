@@ -304,6 +304,8 @@ async def handle_text_message(
         "Processing text message", user_id=user_id, message_length=len(message_text)
     )
 
+    response_sent = False
+
     try:
         # Check rate limit with estimated cost for text processing
         estimated_cost = _estimate_text_processing_cost(message_text)
@@ -457,6 +459,30 @@ async def handle_text_message(
                         ),
                     )
 
+        response_sent = True
+
+        # Push messages to Convex bridge (fire-and-forget, never affects bot)
+        bridge = context.bot_data.get("bridge")
+        if bridge and claude_response:
+            try:
+                chat_id = update.effective_chat.id
+                bridge.fire_and_forget(
+                    bridge.upsert_conversation(chat_id, title=message_text[:80])
+                )
+                bridge.fire_and_forget(
+                    bridge.send_message(
+                        chat_id, "user", message_text,
+                        telegram_message_id=update.message.message_id,
+                    )
+                )
+                bridge.fire_and_forget(
+                    bridge.send_message(
+                        chat_id, "assistant", claude_response.content,
+                    )
+                )
+            except Exception as bridge_err:
+                logger.debug("Bridge push failed", error=str(bridge_err))
+
         # Update session info
         context.user_data["last_message"] = update.message.text
 
@@ -508,12 +534,15 @@ async def handle_text_message(
 
         # Log successful message processing
         if audit_logger:
-            await audit_logger.log_command(
-                user_id=user_id,
-                command="text_message",
-                args=[update.message.text[:100]],  # First 100 chars
-                success=True,
-            )
+            try:
+                await audit_logger.log_command(
+                    user_id=user_id,
+                    command="text_message",
+                    args=[update.message.text[:100]],  # First 100 chars
+                    success=True,
+                )
+            except Exception as audit_err:
+                logger.warning("Failed to log successful audit", error=str(audit_err))
 
         logger.info("Text message processed successfully", user_id=user_id)
 
@@ -524,16 +553,21 @@ async def handle_text_message(
         except Exception as delete_error:
             logger.debug("Failed to delete progress message", error=str(delete_error))
 
-        await update.message.reply_text(_format_error_message(e), parse_mode="HTML")
+        # Only send error to user if we haven't already sent a response
+        if not response_sent:
+            await update.message.reply_text(_format_error_message(e), parse_mode="HTML")
 
         # Log failed processing
         if audit_logger:
-            await audit_logger.log_command(
-                user_id=user_id,
-                command="text_message",
-                args=[update.message.text[:100]],
-                success=False,
-            )
+            try:
+                await audit_logger.log_command(
+                    user_id=user_id,
+                    command="text_message",
+                    args=[update.message.text[:100]],
+                    success=False,
+                )
+            except Exception:
+                logger.debug("Failed to log failed processing audit")
 
         logger.error("Error processing text message", error=str(e), user_id=user_id)
 
@@ -560,6 +594,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         filename=document.file_name,
         file_size=document.file_size,
     )
+
+    response_sent = False
 
     try:
         # Validate filename using security validator
@@ -736,21 +772,27 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 if i < len(formatted_messages) - 1:
                     await asyncio.sleep(0.5)
 
+            response_sent = True
+
         except Exception as e:
             await claude_progress_msg.edit_text(
                 _format_error_message(e), parse_mode="HTML"
             )
+            response_sent = True  # Error was shown via progress message edit
             logger.error("Claude file processing failed", error=str(e), user_id=user_id)
 
         # Log successful file processing
         if audit_logger:
-            await audit_logger.log_file_access(
-                user_id=user_id,
-                file_path=document.file_name,
-                action="upload_processed",
-                success=True,
-                file_size=document.file_size,
-            )
+            try:
+                await audit_logger.log_file_access(
+                    user_id=user_id,
+                    file_path=document.file_name,
+                    action="upload_processed",
+                    success=True,
+                    file_size=document.file_size,
+                )
+            except Exception as audit_err:
+                logger.warning("Failed to log file audit", error=str(audit_err))
 
     except Exception as e:
         try:
@@ -758,18 +800,23 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as delete_error:
             logger.debug("Failed to delete progress message", error=str(delete_error))
 
-        error_msg = f"❌ <b>Error processing file</b>\n\n{escape_html(str(e))}"
-        await update.message.reply_text(error_msg, parse_mode="HTML")
+        # Only send error if we haven't already sent a response
+        if not response_sent:
+            error_msg = f"❌ <b>Error processing file</b>\n\n{escape_html(str(e))}"
+            await update.message.reply_text(error_msg, parse_mode="HTML")
 
         # Log failed file processing
         if audit_logger:
-            await audit_logger.log_file_access(
-                user_id=user_id,
-                file_path=document.file_name,
-                action="upload_failed",
-                success=False,
-                file_size=document.file_size,
-            )
+            try:
+                await audit_logger.log_file_access(
+                    user_id=user_id,
+                    file_path=document.file_name,
+                    action="upload_failed",
+                    success=False,
+                    file_size=document.file_size,
+                )
+            except Exception:
+                logger.debug("Failed to log failed file audit")
 
         logger.error("Error processing document", error=str(e), user_id=user_id)
 

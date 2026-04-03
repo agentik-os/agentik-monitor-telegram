@@ -1,0 +1,69 @@
+projects:
+  # === CLIENTS ===
+  - slug: dentistry
+    name: "🦷 DentistryGPT"
+    path: clients/DentistryGPT
+    enabled: true
+
+  - slug: lawyerai
+    name: "⚖️ LawyerAI"
+    path: clients/LawyerAI
+    enabled: true
+
+  - slug: loumna
+    name: "🎵 Loumna"
+    path: clients/loumna
+    enabled: true
+
+  - slug: gluten-libre
+    name: "🍞 Gluten-Libre"
+    path: clients/Gluten-Libre
+    enabled: true
+
+  - slug: forum-at-work
+    name: "🏢 ForumAtWork"
+    path: clients/ForumAtWork
+    enabled: true
+
+  - slug: sourcing
+    name: "🔍 Sourcing"
+    path: clients/Sourcing
+    enabled: true
+
+  - slug: resonant
+    name: "🔊 Resonant"
+    path: clients/resonant
+    enabled: true
+
+  # === INTERNAL PROJECTS ===
+  - slug: agentik-os
+    name: "🤖 Agentik OS Site"
+    path: work/agentik-os-site
+    enabled: true
+
+  - slug: agentik-monitor
+    name: "📊 Agentik Monitor"
+    path: work/agentik-monitor
+    enabled: true
+
+  - slug: kommu
+    name: "💬 Kommu"
+    path: work/kommu
+    enabled: true
+
+  - slug: l34d
+    name: "📈 L34D"
+    path: work/L34D
+    enabled: true
+
+  # === LIFE ===
+  - slug: life
+    name: "🧬 1-Life"
+    path: 1-life
+    enabled: true
+
+  # === INFRA ===
+  - slug: infra
+    name: "🖥️ Infrastructure"
+    path: .
+    enabled: true

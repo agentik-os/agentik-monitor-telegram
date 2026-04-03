@@ -179,6 +179,17 @@ class Settings(BaseSettings):
         le=2,
     )
 
+    # Convex Bridge (bot-to-dashboard communication)
+    enable_convex_bridge: bool = Field(
+        False, description="Enable Convex bridge for dashboard sync"
+    )
+    convex_site_url: Optional[str] = Field(
+        None, description="Convex deployment site URL (e.g. https://your-app.convex.site)"
+    )
+    agentik_api_secret: Optional[str] = Field(
+        None, description="Shared secret for bridge API authentication"
+    )
+
     # Monitoring
     log_level: str = Field("INFO", description="Logging level")
     enable_telemetry: bool = Field(False, description="Enable anonymous telemetry")

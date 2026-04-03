@@ -35,6 +35,9 @@ from src.security.auth import (
 )
 from src.security.rate_limiter import RateLimiter
 from src.security.validators import SecurityValidator
+from src.automations import AutomationEngine
+from src.automations.composio_client import ComposioClient
+from src.bridge import ConvexBridge
 from src.storage.facade import Storage
 from src.storage.session_storage import SQLiteSessionStorage
 
@@ -170,6 +173,20 @@ async def create_application(config: Settings) -> Dict[str, Any]:
     )
     agent_handler.register()
 
+    # Create Convex bridge (optional)
+    bridge: Optional[ConvexBridge] = None
+    if config.enable_convex_bridge and config.convex_site_url and config.agentik_api_secret:
+        bridge = ConvexBridge(config.convex_site_url, config.agentik_api_secret)
+        logger.info("Convex bridge enabled", url=config.convex_site_url)
+
+    # Create automation engine
+    composio_client = ComposioClient()  # API key from env when available
+    automation_engine = AutomationEngine(
+        claude_integration=claude_integration,
+        composio_client=composio_client,
+        bridge=bridge,
+    )
+
     # Create bot with all dependencies
     dependencies = {
         "auth_manager": auth_manager,
@@ -179,6 +196,8 @@ async def create_application(config: Settings) -> Dict[str, Any]:
         "claude_integration": claude_integration,
         "storage": storage,
         "event_bus": event_bus,
+        "bridge": bridge,
+        "automation_engine": automation_engine,
         "project_registry": None,
         "project_threads_manager": None,
     }
@@ -201,6 +220,7 @@ async def create_application(config: Settings) -> Dict[str, Any]:
         "agent_handler": agent_handler,
         "auth_manager": auth_manager,
         "security_validator": security_validator,
+        "bridge": bridge,
     }
 
 
@@ -217,6 +237,7 @@ async def run_application(app: Dict[str, Any]) -> None:
     notification_service: Optional[NotificationService] = None
     scheduler: Optional[JobScheduler] = None
     project_threads_manager: Optional[ProjectThreadManager] = None
+    bridge: Optional[ConvexBridge] = app.get("bridge")
 
     # Set up signal handlers for graceful shutdown
     shutdown_event = asyncio.Event()
@@ -289,6 +310,22 @@ async def run_application(app: Dict[str, Any]) -> None:
         notification_service.register()
         await notification_service.start()
 
+        # Periodic heartbeat coroutine for bridge
+        async def _heartbeat_loop() -> None:
+            """Send periodic heartbeat to Convex dashboard."""
+            if not bridge:
+                return
+            while True:
+                await asyncio.sleep(60)
+                try:
+                    await bridge.send_heartbeat(
+                        source="telegram-bot",
+                        status="healthy",
+                        message="Bot running",
+                    )
+                except Exception as hb_err:
+                    logger.debug("Heartbeat failed: %s", hb_err)
+
         # Collect concurrent tasks
         tasks = []
 
@@ -305,6 +342,12 @@ async def run_application(app: Dict[str, Any]) -> None:
             )
             tasks.append(api_task)
             logger.info("API server enabled", port=config.api_server_port)
+
+        # Bridge heartbeat (if enabled)
+        if bridge:
+            heartbeat_task = asyncio.create_task(_heartbeat_loop())
+            tasks.append(heartbeat_task)
+            logger.info("Bridge heartbeat task started (every 60s)")
 
         # Scheduler (if enabled)
         if features.scheduler_enabled:
@@ -360,6 +403,8 @@ async def run_application(app: Dict[str, Any]) -> None:
             await bot.stop()
             await claude_integration.shutdown()
             await storage.close()
+            if bridge:
+                await bridge.close()
         except Exception as e:
             logger.error("Error during shutdown", error=str(e))
 
