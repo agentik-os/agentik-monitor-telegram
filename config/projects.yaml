@@ -62,6 +62,11 @@ projects:
     path: 1-life
     enabled: true
 
+  - slug: agentik-team
+    name: "📎 Agentik Team"
+    path: work/Agentik-Team
+    enabled: true
+
   # === INFRA ===
   - slug: infra
     name: "🖥️ Infrastructure"
